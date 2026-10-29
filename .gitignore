@@ -1,0 +1,19 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+scholarships.db
+
+# Other secrets
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Test cache
+.pytest_cache/
+
+# SQLite databases
+*.db
+*.sqlite
+*.sqlite3

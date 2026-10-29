@@ -1,0 +1,46 @@
+SCHOLARSHIP SCOUT — PHASE 12: RELEASE PREPARATION
+
+This is an incremental upgrade pack. It does not contain or replace your app.py,
+scout/, database/, .env, .venv, or scholarships.db. Merge these files into your
+existing Scholarship Scout project root.
+
+1. BACK UP THE CURRENT APP
+   From your project folder in PowerShell:
+       Copy-Item app.py app_phase11_backup.py
+
+2. EXTRACT AND MERGE
+   Extract this ZIP to a temporary folder, then copy its .streamlit, scripts,
+   tests folders and this text file into:
+       C:\Users\admin\Documents\scholarshipscout
+   Merge folders when Windows asks. Do not overwrite or delete .env, .venv,
+   scholarships.db, app.py, scout/, or database/.
+
+3. RUN THE RELEASE CHECK
+   Open PowerShell in the project root and run:
+       .\.venv\Scripts\python.exe scripts/release_check.py
+   The checker expects to be run in the merged project root, not inside this
+   incremental ZIP folder. It checks required paths, app.py syntax, and core
+   dependency declarations. It does not inspect or print secrets.
+
+4. RUN ALL TESTS
+       .\.venv\Scripts\python.exe -m pytest -q
+   If pytest is not installed in this environment, install the project's test
+   dependency as appropriate for your existing setup before rerunning tests.
+
+5. LAUNCH THE APP
+       .\.venv\Scripts\python.exe -m streamlit run app.py
+   Check profile entry, discovery, eligibility results, save/update tracking,
+   deadline reminders, comparison, readiness checklist, CSV export, and the AI
+   assistant (including its local fallback if Gemini is unavailable).
+
+DEPLOYMENT NOTES
+- This pack prepares the project for a release check; it does not deploy the app.
+- Before any public deployment, rotate any API keys that may have been exposed,
+  keep secrets in the hosting provider's secret manager, and never commit .env.
+- SQLite data stored on an ephemeral host may not persist across restarts or
+  deployments. Confirm durable storage or choose a persistent database before
+  relying on saved scholarships and reminders in production.
+- Eligibility scores are preliminary guidance, not official decisions or a
+  probability of winning a scholarship. Confirm requirements and deadlines on
+  the official scholarship provider's website.
+- Test with a non-sensitive demo profile before presenting the app publicly.
