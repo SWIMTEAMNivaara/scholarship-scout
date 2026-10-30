@@ -1,10 +1,8 @@
-```python
 import hashlib
 import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-
 DB_PATH = Path(__file__).resolve().parent.parent / "scholarships.db"
 
 
