@@ -15,6 +15,7 @@ from scout.source_trust import annotate_source, assess_source
 from scout.scholarship_intelligence import assess_deadline, build_comparison_rows
 from scout.product_quality import readiness_items, readiness_summary, safe_csv_cell
 import logging
+import uuid
 
 logger = logging.getLogger(__name__)
 from database.db import (
@@ -27,6 +28,7 @@ from database.db import (
     list_reminders,
     update_reminder_completed,
     delete_reminder,
+    workspace_id,
 )
 
 load_dotenv()
@@ -58,6 +60,13 @@ with st.sidebar:
     category = st.selectbox("Category", ["Prefer not to say", "General", "OBC", "SC", "ST", "EWS", "Other"])
     interests = st.multiselect("Scholarship interests", ["Merit-based", "Need-based", "Government", "Private foundation", "Engineering / STEM"], default=["Merit-based", "Need-based", "Government"])
     max_results = st.slider("Results to search", 5, 20, 10)
+
+    st.divider()
+    st.subheader("🔒 Your private workspace")
+    workspace_code = st.text_input(
+        "Workspace code (optional)", type="password",
+        help="Saved scholarships and reminders are private to your workspace. Leave blank for a temporary workspace that is cleared when you close the tab. Use a long, unique code you can remember; anyone who knows it can see your tracker. Do not use your name, phone number or email.",
+    )
     st.caption("Your profile is used for preliminary matching. It is not sent as a full personal identity profile to scholarship providers.")
 
 profile = {
@@ -65,6 +74,11 @@ profile = {
     "college_type": college_type, "income": int(income), "marks": float(marks),
     "category": category, "interests": interests,
 }
+
+
+if "guest_workspace" not in st.session_state:
+    st.session_state["guest_workspace"] = "guest-" + uuid.uuid4().hex
+WORKSPACE = workspace_id(workspace_code) if workspace_code.strip() else st.session_state["guest_workspace"]
 
 
 def parse_deadline(value):
@@ -266,7 +280,7 @@ with find_tab:
     if records:
         eligible_count = sum(1 for r in records if r.get("match", {}).get("status") in ("Strong match", "Potential match"))
         verify_count = sum(1 for r in records if r.get("match", {}).get("status") == "Needs verification")
-        saved_urls = {r.get("url") for r in list_saved_scholarships()}
+        saved_urls = {r.get("url") for r in list_saved_scholarships(workspace=WORKSPACE)}
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Results", len(records))
         m2.metric("Potential matches", eligible_count)
@@ -400,7 +414,7 @@ with find_tab:
                     if url in saved_urls:
                         st.button("✓ Saved", key=f"saved_disabled_{i}", disabled=True, use_container_width=True)
                     elif st.button("☆ Save to tracker", key=f"save_{i}", use_container_width=True):
-                        save_scholarship(item)
+                        save_scholarship(item, workspace=WORKSPACE)
                         st.toast("Saved to your tracker")
                         st.rerun()
                 with note_col:
@@ -410,7 +424,7 @@ with find_tab:
 
 with saved_tab:
     st.subheader("My scholarship tracker")
-    saved = list_saved_scholarships()
+    saved = list_saved_scholarships(workspace=WORKSPACE)
     if not saved:
         st.info("Your tracker is empty. Discover scholarships and save the opportunities you want to follow.")
     else:
@@ -446,7 +460,7 @@ with saved_tab:
                 c1, c2 = st.columns([2, 1])
                 new_status = c1.selectbox("Application status", statuses, index=statuses.index(current) if current in statuses else 0, key=f"status_{row['id']}")
                 if c2.button("Update status", key=f"update_{row['id']}", use_container_width=True):
-                    update_application_status(row["id"], new_status)
+                    update_application_status(row["id"], new_status, workspace=WORKSPACE)
                     st.success("Application status updated.")
                     st.rerun()
                 with st.expander("＋ Add a reminder for this scholarship"):
@@ -462,14 +476,14 @@ with saved_tab:
                         key=f"reminder_note_{row['id']}",
                     )
                     if st.button("Save reminder", key=f"create_reminder_{row['id']}", type="primary"):
-                        create_reminder(row["id"], row.get("name") or "Scholarship opportunity", reminder_date.isoformat(), reminder_note.strip())
+                        create_reminder(row["id"], row.get("name") or "Scholarship opportunity", reminder_date.isoformat(), reminder_note.strip(), workspace=WORKSPACE)
                         st.success("Reminder saved. It will appear in the Deadlines & reminders tab.")
                         st.rerun()
 
 with reminders_tab:
     st.subheader("📅 Deadlines & reminders")
     st.caption("These are in-app reminders stored locally in your SQLite database. They do not send email, SMS, push notifications, or run background monitoring.")
-    reminders = list_reminders()
+    reminders = list_reminders(workspace=WORKSPACE)
     today = date.today()
     pending = [r for r in reminders if not r.get("completed")]
     overdue = [r for r in pending if r.get("reminder_date") and r["reminder_date"] < today.isoformat()]
@@ -518,15 +532,15 @@ with reminders_tab:
                 r2.write("Completed" if reminder.get("completed") else "Pending")
                 if reminder.get("completed"):
                     if r3.button("Reopen", key=f"reopen_reminder_{reminder['id']}"):
-                        update_reminder_completed(reminder["id"], False)
+                        update_reminder_completed(reminder["id"], False, workspace=WORKSPACE)
                         st.rerun()
                 else:
                     if r3.button("Complete", key=f"complete_reminder_{reminder['id']}"):
-                        update_reminder_completed(reminder["id"], True)
+                        update_reminder_completed(reminder["id"], True, workspace=WORKSPACE)
                         st.rerun()
                 with st.expander("Reminder actions", key=f"reminder_actions_{reminder['id']}"):
                     if st.button("Delete reminder", key=f"delete_reminder_{reminder['id']}"):
-                        delete_reminder(reminder["id"])
+                        delete_reminder(reminder["id"], workspace=WORKSPACE)
                         st.rerun()
     else:
         st.caption("Saved reminders will appear here.")
@@ -540,7 +554,7 @@ with assistant_tab:
         st.info("Local source-grounded mode is active. To enable generative AI answers, add GEMINI_API_KEY to your local .env file. No API key is required to use the basic assistant.")
     assistant_items = []
     assistant_items.extend(st.session_state.get("scholarships", []))
-    assistant_items.extend(list_saved_scholarships())
+    assistant_items.extend(list_saved_scholarships(workspace=WORKSPACE))
     deduped_items = []
     seen_assistant_urls = set()
     for assistant_item in assistant_items:

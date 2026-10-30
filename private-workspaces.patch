@@ -1,0 +1,360 @@
+diff --git a/app.py b/app.py
+index 0e7c87b..b2e124b 100644
+--- a/app.py
++++ b/app.py
+@@ -15,6 +15,7 @@ from scout.source_trust import annotate_source, assess_source
+ from scout.scholarship_intelligence import assess_deadline, build_comparison_rows
+ from scout.product_quality import readiness_items, readiness_summary, safe_csv_cell
+ import logging
++import uuid
+ 
+ logger = logging.getLogger(__name__)
+ from database.db import (
+@@ -27,6 +28,7 @@ from database.db import (
+     list_reminders,
+     update_reminder_completed,
+     delete_reminder,
++    workspace_id,
+ )
+ 
+ load_dotenv()
+@@ -58,6 +60,13 @@ with st.sidebar:
+     category = st.selectbox("Category", ["Prefer not to say", "General", "OBC", "SC", "ST", "EWS", "Other"])
+     interests = st.multiselect("Scholarship interests", ["Merit-based", "Need-based", "Government", "Private foundation", "Engineering / STEM"], default=["Merit-based", "Need-based", "Government"])
+     max_results = st.slider("Results to search", 5, 20, 10)
++
++    st.divider()
++    st.subheader("🔒 Your private workspace")
++    workspace_code = st.text_input(
++        "Workspace code (optional)", type="password",
++        help="Saved scholarships and reminders are private to your workspace. Leave blank for a temporary workspace that is cleared when you close the tab. Use a long, unique code you can remember; anyone who knows it can see your tracker. Do not use your name, phone number or email.",
++    )
+     st.caption("Your profile is used for preliminary matching. It is not sent as a full personal identity profile to scholarship providers.")
+ 
+ profile = {
+@@ -67,6 +76,11 @@ profile = {
+ }
+ 
+ 
++if "guest_workspace" not in st.session_state:
++    st.session_state["guest_workspace"] = "guest-" + uuid.uuid4().hex
++WORKSPACE = workspace_id(workspace_code) if workspace_code.strip() else st.session_state["guest_workspace"]
++
++
+ def parse_deadline(value):
+     if not value:
+         return None
+@@ -266,7 +280,7 @@ with find_tab:
+     if records:
+         eligible_count = sum(1 for r in records if r.get("match", {}).get("status") in ("Strong match", "Potential match"))
+         verify_count = sum(1 for r in records if r.get("match", {}).get("status") == "Needs verification")
+-        saved_urls = {r.get("url") for r in list_saved_scholarships()}
++        saved_urls = {r.get("url") for r in list_saved_scholarships(workspace=WORKSPACE)}
+         m1, m2, m3, m4 = st.columns(4)
+         m1.metric("Results", len(records))
+         m2.metric("Potential matches", eligible_count)
+@@ -400,7 +414,7 @@ with find_tab:
+                     if url in saved_urls:
+                         st.button("✓ Saved", key=f"saved_disabled_{i}", disabled=True, use_container_width=True)
+                     elif st.button("☆ Save to tracker", key=f"save_{i}", use_container_width=True):
+-                        save_scholarship(item)
++                        save_scholarship(item, workspace=WORKSPACE)
+                         st.toast("Saved to your tracker")
+                         st.rerun()
+                 with note_col:
+@@ -410,7 +424,7 @@ with find_tab:
+ 
+ with saved_tab:
+     st.subheader("My scholarship tracker")
+-    saved = list_saved_scholarships()
++    saved = list_saved_scholarships(workspace=WORKSPACE)
+     if not saved:
+         st.info("Your tracker is empty. Discover scholarships and save the opportunities you want to follow.")
+     else:
+@@ -446,7 +460,7 @@ with saved_tab:
+                 c1, c2 = st.columns([2, 1])
+                 new_status = c1.selectbox("Application status", statuses, index=statuses.index(current) if current in statuses else 0, key=f"status_{row['id']}")
+                 if c2.button("Update status", key=f"update_{row['id']}", use_container_width=True):
+-                    update_application_status(row["id"], new_status)
++                    update_application_status(row["id"], new_status, workspace=WORKSPACE)
+                     st.success("Application status updated.")
+                     st.rerun()
+                 with st.expander("＋ Add a reminder for this scholarship"):
+@@ -462,14 +476,14 @@ with saved_tab:
+                         key=f"reminder_note_{row['id']}",
+                     )
+                     if st.button("Save reminder", key=f"create_reminder_{row['id']}", type="primary"):
+-                        create_reminder(row["id"], row.get("name") or "Scholarship opportunity", reminder_date.isoformat(), reminder_note.strip())
++                        create_reminder(row["id"], row.get("name") or "Scholarship opportunity", reminder_date.isoformat(), reminder_note.strip(), workspace=WORKSPACE)
+                         st.success("Reminder saved. It will appear in the Deadlines & reminders tab.")
+                         st.rerun()
+ 
+ with reminders_tab:
+     st.subheader("📅 Deadlines & reminders")
+     st.caption("These are in-app reminders stored locally in your SQLite database. They do not send email, SMS, push notifications, or run background monitoring.")
+-    reminders = list_reminders()
++    reminders = list_reminders(workspace=WORKSPACE)
+     today = date.today()
+     pending = [r for r in reminders if not r.get("completed")]
+     overdue = [r for r in pending if r.get("reminder_date") and r["reminder_date"] < today.isoformat()]
+@@ -518,15 +532,15 @@ with reminders_tab:
+                 r2.write("Completed" if reminder.get("completed") else "Pending")
+                 if reminder.get("completed"):
+                     if r3.button("Reopen", key=f"reopen_reminder_{reminder['id']}"):
+-                        update_reminder_completed(reminder["id"], False)
++                        update_reminder_completed(reminder["id"], False, workspace=WORKSPACE)
+                         st.rerun()
+                 else:
+                     if r3.button("Complete", key=f"complete_reminder_{reminder['id']}"):
+-                        update_reminder_completed(reminder["id"], True)
++                        update_reminder_completed(reminder["id"], True, workspace=WORKSPACE)
+                         st.rerun()
+                 with st.expander("Reminder actions", key=f"reminder_actions_{reminder['id']}"):
+                     if st.button("Delete reminder", key=f"delete_reminder_{reminder['id']}"):
+-                        delete_reminder(reminder["id"])
++                        delete_reminder(reminder["id"], workspace=WORKSPACE)
+                         st.rerun()
+     else:
+         st.caption("Saved reminders will appear here.")
+@@ -540,7 +554,7 @@ with assistant_tab:
+         st.info("Local source-grounded mode is active. To enable generative AI answers, add GEMINI_API_KEY to your local .env file. No API key is required to use the basic assistant.")
+     assistant_items = []
+     assistant_items.extend(st.session_state.get("scholarships", []))
+-    assistant_items.extend(list_saved_scholarships())
++    assistant_items.extend(list_saved_scholarships(workspace=WORKSPACE))
+     deduped_items = []
+     seen_assistant_urls = set()
+     for assistant_item in assistant_items:
+diff --git a/database/db.py b/database/db.py
+index 443cdf6..fe52907 100644
+--- a/database/db.py
++++ b/database/db.py
+@@ -1,3 +1,4 @@
++import hashlib
+ import json
+ import sqlite3
+ from datetime import datetime
+@@ -10,34 +11,71 @@ def _connect():
+     conn.row_factory = sqlite3.Row
+     return conn
+ 
++def workspace_id(code):
++    """Turn a user-chosen workspace code into an opaque, non-reversible id."""
++    code = (code or "").strip()
++    if not code:
++        return ""
++    return hashlib.sha256(code.encode("utf-8")).hexdigest()[:32]
++
++
+ def init_db():
++    """Create tables; migrate older single-user databases to per-workspace rows."""
+     with _connect() as conn:
+-        conn.execute("""
+-            CREATE TABLE IF NOT EXISTS scholarships (
+-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+-                url TEXT NOT NULL UNIQUE,
+-                name TEXT NOT NULL,
+-                deadline TEXT,
+-                source_name TEXT,
+-                data_json TEXT NOT NULL,
+-                application_status TEXT NOT NULL DEFAULT 'Interested',
+-                last_checked TEXT
+-            )
+-        """)
+-
+-def save_scholarship(item):
++        cols = [r["name"] for r in conn.execute("PRAGMA table_info(scholarships)")]
++        if not cols:
++            conn.execute("""
++                CREATE TABLE scholarships (
++                    id INTEGER PRIMARY KEY AUTOINCREMENT,
++                    workspace TEXT NOT NULL DEFAULT '',
++                    url TEXT NOT NULL,
++                    name TEXT NOT NULL,
++                    deadline TEXT,
++                    source_name TEXT,
++                    data_json TEXT NOT NULL,
++                    application_status TEXT NOT NULL DEFAULT 'Interested',
++                    last_checked TEXT,
++                    UNIQUE(workspace, url)
++                )
++            """)
++        elif "workspace" not in cols:
++            # Old schema had UNIQUE(url) only; rebuild so each workspace can save the same URL.
++            conn.execute("ALTER TABLE scholarships RENAME TO scholarships_old")
++            conn.execute("""
++                CREATE TABLE scholarships (
++                    id INTEGER PRIMARY KEY AUTOINCREMENT,
++                    workspace TEXT NOT NULL DEFAULT '',
++                    url TEXT NOT NULL,
++                    name TEXT NOT NULL,
++                    deadline TEXT,
++                    source_name TEXT,
++                    data_json TEXT NOT NULL,
++                    application_status TEXT NOT NULL DEFAULT 'Interested',
++                    last_checked TEXT,
++                    UNIQUE(workspace, url)
++                )
++            """)
++            conn.execute("""
++                INSERT INTO scholarships(id, url, name, deadline, source_name, data_json, application_status, last_checked)
++                SELECT id, url, name, deadline, source_name, data_json, application_status, last_checked
++                FROM scholarships_old
++            """)
++            conn.execute("DROP TABLE scholarships_old")
++
++def save_scholarship(item, workspace=""):
+     now = datetime.now().astimezone().isoformat(timespec="seconds")
+     with _connect() as conn:
+         conn.execute("""
+-            INSERT INTO scholarships(url, name, deadline, source_name, data_json, application_status, last_checked)
+-            VALUES (?, ?, ?, ?, ?, 'Interested', ?)
+-            ON CONFLICT(url) DO UPDATE SET
++            INSERT INTO scholarships(workspace, url, name, deadline, source_name, data_json, application_status, last_checked)
++            VALUES (?, ?, ?, ?, ?, ?, 'Interested', ?)
++            ON CONFLICT(workspace, url) DO UPDATE SET
+                 name=excluded.name,
+                 deadline=excluded.deadline,
+                 source_name=excluded.source_name,
+                 data_json=excluded.data_json,
+                 last_checked=excluded.last_checked
+         """, (
++            workspace,
+             item.get("url", ""),
+             item.get("name") or item.get("title") or "Scholarship opportunity",
+             item.get("deadline", ""),
+@@ -46,9 +84,9 @@ def save_scholarship(item):
+             now,
+         ))
+ 
+-def list_saved_scholarships():
++def list_saved_scholarships(workspace=""):
+     with _connect() as conn:
+-        rows = conn.execute("SELECT * FROM scholarships ORDER BY id DESC").fetchall()
++        rows = conn.execute("SELECT * FROM scholarships WHERE workspace=? ORDER BY id DESC", (workspace,)).fetchall()
+     output = []
+     for row in rows:
+         data = json.loads(row["data_json"])
+@@ -64,9 +102,9 @@ def list_saved_scholarships():
+         output.append(data)
+     return output
+ 
+-def update_application_status(row_id, status):
++def update_application_status(row_id, status, workspace=""):
+     with _connect() as conn:
+-        conn.execute("UPDATE scholarships SET application_status=? WHERE id=?", (status, row_id))
++        conn.execute("UPDATE scholarships SET application_status=? WHERE id=? AND workspace=?", (status, row_id, workspace))
+ 
+ 
+ def init_reminders_table():
+@@ -84,32 +122,35 @@ def init_reminders_table():
+                 FOREIGN KEY(scholarship_id) REFERENCES scholarships(id)
+             )
+         """)
++        rcols = [r["name"] for r in conn.execute("PRAGMA table_info(reminders)")]
++        if "workspace" not in rcols:
++            conn.execute("ALTER TABLE reminders ADD COLUMN workspace TEXT NOT NULL DEFAULT ''")
+ 
+ 
+-def create_reminder(scholarship_id, scholarship_name, reminder_date, note=""):
++def create_reminder(scholarship_id, scholarship_name, reminder_date, note="", workspace=""):
+     now = datetime.now().astimezone().isoformat(timespec="seconds")
+     with _connect() as conn:
+         conn.execute("""
+-            INSERT INTO reminders(scholarship_id, scholarship_name, reminder_date, note, completed, created_at)
+-            VALUES (?, ?, ?, ?, 0, ?)
+-        """, (scholarship_id, scholarship_name, reminder_date, note, now))
++            INSERT INTO reminders(scholarship_id, scholarship_name, reminder_date, note, completed, created_at, workspace)
++            VALUES (?, ?, ?, ?, 0, ?, ?)
++        """, (scholarship_id, scholarship_name, reminder_date, note, now, workspace))
+ 
+ 
+-def list_reminders(include_completed=True):
++def list_reminders(include_completed=True, workspace=""):
+     with _connect() as conn:
+-        query = "SELECT * FROM reminders"
++        query = "SELECT * FROM reminders WHERE workspace=?"
+         if not include_completed:
+-            query += " WHERE completed=0"
++            query += " AND completed=0"
+         query += " ORDER BY reminder_date ASC, id DESC"
+-        rows = conn.execute(query).fetchall()
++        rows = conn.execute(query, (workspace,)).fetchall()
+     return [dict(row) for row in rows]
+ 
+ 
+-def update_reminder_completed(reminder_id, completed):
++def update_reminder_completed(reminder_id, completed, workspace=""):
+     with _connect() as conn:
+-        conn.execute("UPDATE reminders SET completed=? WHERE id=?", (1 if completed else 0, reminder_id))
++        conn.execute("UPDATE reminders SET completed=? WHERE id=? AND workspace=?", (1 if completed else 0, reminder_id, workspace))
+ 
+ 
+-def delete_reminder(reminder_id):
++def delete_reminder(reminder_id, workspace=""):
+     with _connect() as conn:
+-        conn.execute("DELETE FROM reminders WHERE id=?", (reminder_id,))
++        conn.execute("DELETE FROM reminders WHERE id=? AND workspace=?", (reminder_id, workspace))
+diff --git a/tests/test_workspaces.py b/tests/test_workspaces.py
+new file mode 100644
+index 0000000..404255b
+--- /dev/null
++++ b/tests/test_workspaces.py
+@@ -0,0 +1,57 @@
++import sqlite3
++
++from database import db
++
++
++def _fresh(tmp_path, monkeypatch):
++    monkeypatch.setattr(db, "DB_PATH", tmp_path / "t.db")
++    db.init_db()
++    db.init_reminders_table()
++
++
++def test_workspaces_do_not_see_each_other(tmp_path, monkeypatch):
++    _fresh(tmp_path, monkeypatch)
++    a, b = db.workspace_id("alpha-code"), db.workspace_id("beta-code")
++    db.save_scholarship({"url": "https://x.org/s", "name": "S"}, workspace=a)
++    assert len(db.list_saved_scholarships(workspace=a)) == 1
++    assert db.list_saved_scholarships(workspace=b) == []
++    # same URL can be saved independently by another workspace
++    db.save_scholarship({"url": "https://x.org/s", "name": "S"}, workspace=b)
++    assert len(db.list_saved_scholarships(workspace=b)) == 1
++
++
++def test_cannot_modify_other_workspace_rows(tmp_path, monkeypatch):
++    _fresh(tmp_path, monkeypatch)
++    a, b = db.workspace_id("alpha-code"), db.workspace_id("beta-code")
++    db.save_scholarship({"url": "https://x.org/s", "name": "S"}, workspace=a)
++    row = db.list_saved_scholarships(workspace=a)[0]
++    db.update_application_status(row["id"], "Applied", workspace=b)
++    assert db.list_saved_scholarships(workspace=a)[0]["application_status"] == "Interested"
++    db.create_reminder(row["id"], "S", "2026-12-01", workspace=a)
++    rid = db.list_reminders(workspace=a)[0]["id"]
++    db.delete_reminder(rid, workspace=b)
++    assert len(db.list_reminders(workspace=a)) == 1
++    assert db.list_reminders(workspace=b) == []
++    db.update_reminder_completed(rid, True, workspace=b)
++    assert db.list_reminders(workspace=a)[0]["completed"] == 0
++
++
++def test_blank_code_gives_empty_id():
++    assert db.workspace_id("   ") == ""
++    assert db.workspace_id("abc") == db.workspace_id("abc") != "abc"
++
++
++def test_old_database_is_migrated(tmp_path, monkeypatch):
++    path = tmp_path / "old.db"
++    conn = sqlite3.connect(path)
++    conn.execute("""CREATE TABLE scholarships (
++        id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
++        deadline TEXT, source_name TEXT, data_json TEXT NOT NULL,
++        application_status TEXT NOT NULL DEFAULT 'Interested', last_checked TEXT)""")
++    conn.execute("INSERT INTO scholarships(url,name,data_json) VALUES ('https://old.org','Old','{}')")
++    conn.commit(); conn.close()
++    monkeypatch.setattr(db, "DB_PATH", path)
++    db.init_db(); db.init_reminders_table()
++    assert [r["name"] for r in db.list_saved_scholarships(workspace="")] == ["Old"]
++    db.save_scholarship({"url": "https://old.org", "name": "Old"}, workspace="w1")
++    assert len(db.list_saved_scholarships(workspace="w1")) == 1
